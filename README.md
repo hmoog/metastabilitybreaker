@@ -69,4 +69,25 @@ If we now apply this algorithm to the two heaviest branches of a conflict set, t
 
 Let's assume that the conflict set contains 3 branches `A`, `B` and `C` and let's also assume that `Hash(A) < Hash(B) < Hash(C)`.
 
-There are now 3 different permutations for the candidates of the two heaviest branches: `A and B`,  `A and C`, `B and C`. Since `C` has the highest hash in any of the permutations, it will at some point no longer be chosen by any of the honest nodes and the set of options will be reduced to the trivial case. This is true for any size of conflict set as there will always be a branch with the lowest hash.
+There are now 3 different permutations for the candidates of the two heaviest branches: `A and B`,  `A and C`, `B and C`. Since `C` has the highest hash in any of the permutations, it will at some point no longer be able to gather any votes which reduces the set to the trivial case that has to decide between `A and B`.
+
+This is true for any size of conflicts as there will always be a branch with the lowest hash, that will ultimately lose against its competitor when kept in a metastable state.
+
+## Simulations
+
+The code in this repository tests multiple different attack strategies:
+
+- The MinorityVoter tries to keep the system undecided by always switching his opinion to the second-heaviest opinion.
+- The LowerHashVoter introduces new lower hashes and tests the scenario where the conflict set is "open".
+
+The simulation results show that the proposed mechanism is resilient against the MinorityVoter strategy even if they have a really large amount of influence in the system (e.g. 49% weight).
+
+It is also resilient against the LowerHashVoter strategy but only if the attacker is not the node with the absolute most influence in the whole consensus. The reason for that is that in that case an attacker can continue to mine transactions with lower hashes, and gradually release them before any of the honest nodes is ever able to make a 2nd statement on one of his previous proposals.
+
+While this attack is "theoretically" possible, it would be extremely hard to pull off in practice as it is nearly impossible to time the messages, so no two honest nodes will ever vote for the same branch and eventually exceed the weight of the attacker. The same attack would also be possible in any blockchain and the fact that we haven't seen something like this is a good indicator that it is an extremely unrealistic attack vector.
+
+Nevertheless, it would also be "detectable" as the same attacker would give his weight to a new lower branch over and over again, and we could later add a behavioral aspect to the consensus weight that uses this kind of observation to modify the weight of the validators.
+
+## Conclusion
+
+The described metastability breaking mechanism is a very simple and straight forward extension of our vanilla consensus mechanism. The simulations show that it reliably breaks metastable states within 1-2 seconds.
