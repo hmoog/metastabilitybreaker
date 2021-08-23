@@ -36,6 +36,9 @@ When written in this "guard programming" style, it becomes very obvious, that th
 Instead of only choosing the branch with the lower hash when their weight is exactly the same, I now propose to gradually (over time) increase the allowed deltaWeight for this to trigger. The modified code would look like this:
 
 ```go
+// ConfirmationThreshold is the threshold of collected statements at which we consider something confirmed
+ConfirmationThreshold = 0.66
+
 // MetastabilityBreakingThreshold defines the time until when the metastability breaking mechanism will unfold its full power. 
 MetastabilityBreakingThreshold = 5 s
 
@@ -50,7 +53,7 @@ TimeScaling(branch1, branch2) {
 }
 
 FavoredBranch(branch1, branch2) {
-	metastabilityBreakingThreshold := timeScaling(branch1, branch2) * confirmationThreshold
+	metastabilityBreakingThreshold := timeScaling(branch1, branch2) * ConfirmationThreshold
 	
 	if deltaWeight(branch1, branch2) =< metastabilityBreakingThreshold {
 		return branch1.hash < branch2.hash ? branch1 : branch2
@@ -60,4 +63,10 @@ FavoredBranch(branch1, branch2) {
 }
 ```
 
-The longer the two branches stay pending, the larger the threshold gets at which we trigger the selection of the branch with the lower hash and the more likely, nodes are to choose the corresponding branch.
+The longer the two branches stay pending, the larger the threshold gets at which we trigger the selection of the branch with the lower hash. It is important to note that this metastability breaker automatically disables itself once the ConfirmationThreshold is reached independently of how long the conflicting branches stay in the DAG.
+
+If we now apply this algorithm to the two heaviest branches of a conflict set, then nodes should over time converge to the same branch. This is trivially true if the set only contains two branches `A` and `B`, but it even holds for larger sets:
+
+Let's assume that the conflict set contains 3 branches `A`, `B` and `C` and let's also assume that `Hash(A) < Hash(B) < Hash(C)`.
+
+There are now 3 different permutations for the candidates of the two heaviest branches: `A and B`,  `A and C`, `B and C`. Since `C` has the highest hash in any of the permutations, it will at some point no longer be chosen by any of the honest nodes and the set of options will be reduced to the trivial case. This is true for any size of conflict set as there will always be a branch with the lowest hash.
