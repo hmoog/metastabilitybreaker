@@ -13,6 +13,7 @@ const (
 
 type Consensus struct {
 	voter Voter
+	timeOffset time.Duration
 }
 
 func NewConsensus(voter Voter) *Consensus {
@@ -47,7 +48,7 @@ func (c *Consensus) FavoredBranch() BranchID {
 	}
 
 	if c.voter.Network().MetastabilityBreakingThreshold != 0 && c.deltaWeight(heaviestBranch, secondHeaviestBranch) <= c.timeScaling(heaviestBranch, secondHeaviestBranch)*confirmationThreshold {
-		if heaviestBranch > secondHeaviestBranch {
+		if heaviestBranch < secondHeaviestBranch {
 			return heaviestBranch
 		}
 
@@ -70,10 +71,10 @@ func (c *Consensus) pendingTime(branch1ID, branch2ID BranchID) time.Duration {
 	branch2SolidificationTime := c.voter.BranchManager().Metadata(branch2ID).SolidificationTime
 
 	if branch1SolidificationTime.After(branch2SolidificationTime) {
-		return time.Now().Sub(branch1SolidificationTime)
+		return time.Now().Add(c.timeOffset).Sub(branch1SolidificationTime)
 	}
 
-	return time.Now().Sub(branch2SolidificationTime)
+	return time.Now().Add(c.timeOffset).Sub(branch2SolidificationTime)
 }
 
 func (c *Consensus) timeScaling(branch1ID, branch2ID BranchID) float64 {

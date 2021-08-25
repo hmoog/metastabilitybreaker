@@ -2,6 +2,7 @@ package metastabilitybreaker
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/iotaledger/hive.go/events"
 )
@@ -12,6 +13,10 @@ import (
 type Vote struct {
 	Issuer   VoterID
 	BranchID BranchID
+}
+
+func (v *Vote) String() string {
+	return v.Issuer.String() + " votes for " + v.BranchID.String()
 }
 
 // endregion ///////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -69,11 +74,18 @@ func (v *HonestVoter) OnVoteReceived(vote *Vote) {
 	v.approvalWeightManager.ProcessVote(vote)
 }
 
-func (v *HonestVoter) SendVote() {
+func (v *HonestVoter) SendVote() (opinionChanged bool) {
+	favoredBranch := v.consensus.FavoredBranch()
+	if favoredBranch == v.approvalWeightManager.lastStatements[v.id] {
+		return false
+	}
+
 	v.network.VoteReceived.Trigger(&Vote{
 		Issuer:   v.id,
-		BranchID: v.consensus.FavoredBranch(),
+		BranchID: favoredBranch,
 	})
+
+	return true
 }
 
 // endregion ///////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -111,8 +123,9 @@ func (m *MinorityVoter) VoteProcessed(vote *Vote) {
 	}
 }
 
-func (m *MinorityVoter) SendVote() {
+func (m *MinorityVoter) SendVote() (opinionChanged bool) {
 	// do nothing, we have our own voting strategy based on the behavior of others
+	return false
 }
 
 // endregion ///////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -148,12 +161,112 @@ func (m *LowerHashVoter) VoteProcessed(vote *Vote) {
 	}
 }
 
-func (m *LowerHashVoter) SendVote() {
+func (m *LowerHashVoter) SendVote() (opinionChanged bool) {
 	// do nothing, we have our own voting strategy based on the behavior of others
+	return false
 }
 
 func (m *LowerHashVoter) Type() string {
 	return "LowerHashVoter"
+}
+
+// endregion ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// region SlowMinorityVoter ///////////////////////////////////////////////////////////////////////////////////////////////
+
+type SlowMinorityVoter struct {
+	*HonestVoter
+
+	lowestBranch BranchID
+}
+
+func NewSlowMinorityVoter(network *Network) (voter Voter) {
+	slowMinorityVoter := &SlowMinorityVoter{
+		HonestVoter: NewHonestVoter(network).(*HonestVoter),
+	}
+
+	network.BeforeNextVote.Attach(events.NewClosure(slowMinorityVoter.BeforeNextVote))
+	network.VoteReceived.AttachAfter(events.NewClosure(func(vote *Vote) {
+		issuer, exists := network.Voters[vote.Issuer]
+		if !exists {
+			return
+		}
+
+		fmt.Println("==", issuer.Type(), issuer.ID(), "votes for", vote.BranchID)
+		fmt.Println()
+		fmt.Println(slowMinorityVoter.approvalWeightManager.StringBranchWeights())
+		fmt.Printf("lowerHashThreshold = %0.2f\n", slowMinorityVoter.consensus.timeScaling(BranchID(1), BranchID(2)) * confirmationThreshold)
+		fmt.Println()
+	}))
+
+	return slowMinorityVoter
+}
+
+func (m *SlowMinorityVoter) BeforeNextVote(voter Voter) {
+	if voter.Type() != "HonestVoter" {
+		return
+	}
+
+	predictedBranch := m.consensus.FavoredBranch()
+	var minorityBranch BranchID
+	if largestBranch, secondLargestBranch := m.consensus.CompetingBranches(); largestBranch == predictedBranch {
+		minorityBranch = secondLargestBranch
+	} else {
+		minorityBranch = largestBranch
+	}
+
+	reverseSimulatedVote := m.simulateVote(voter.ID(), predictedBranch)
+	reverseSimulatedAttackerVote := m.simulateVote(m.ID(), minorityBranch)
+	m.consensus.timeOffset = 100 * time.Millisecond
+	predictedBranchAfterAttack := m.consensus.FavoredBranch()
+	m.consensus.timeOffset = 0 * time.Millisecond
+	reverseSimulatedVote()
+	reverseSimulatedAttackerVote()
+
+	if predictedBranchAfterAttack != minorityBranch && m.approvalWeightManager.lastStatements[m.id] != minorityBranch {
+		m.network.VoteReceived.Trigger(&Vote{
+			Issuer:   m.id,
+			BranchID: minorityBranch,
+		})
+	}
+}
+
+func (m *SlowMinorityVoter) simulateVote(voterID VoterID, branchID BranchID) (reverser func()) {
+	m.BranchManager().RegisterBranch(branchID)
+
+	lastBranchID, exists := m.approvalWeightManager.LastStatements()[voterID]
+	if !exists {
+		m.approvalWeightManager.updateWeight(branchID, m.network.WeightDistribution.Weight(voterID))
+
+		m.approvalWeightManager.lastStatements[voterID] = branchID
+
+		return func() {
+			delete(m.approvalWeightManager.lastStatements, voterID)
+
+			m.approvalWeightManager.updateWeight(branchID, -m.network.WeightDistribution.Weight(voterID))
+		}
+	}
+
+	m.approvalWeightManager.updateWeight(lastBranchID, -m.network.WeightDistribution.Weight(voterID))
+	m.approvalWeightManager.updateWeight(branchID, m.network.WeightDistribution.Weight(voterID))
+
+	m.approvalWeightManager.lastStatements[voterID] = branchID
+
+	return func() {
+		m.approvalWeightManager.lastStatements[voterID] = lastBranchID
+
+		m.approvalWeightManager.updateWeight(lastBranchID, m.network.WeightDistribution.Weight(voterID))
+		m.approvalWeightManager.updateWeight(branchID, -m.network.WeightDistribution.Weight(voterID))
+	}
+}
+
+func (m *SlowMinorityVoter) SendVote() (opinionChanged bool) {
+	// do nothing, we have our own voting strategy based on the behavior of others
+	return false
+}
+
+func (m *SlowMinorityVoter) Type() string {
+	return "SlowMinorityVoter"
 }
 
 // endregion ///////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -166,7 +279,7 @@ type Voter interface {
 	Network() *Network
 	ApprovalWeightManager() *ApprovalWeightManager
 	BranchManager() *BranchManager
-	SendVote()
+	SendVote() (opinionChanged bool)
 	OnVoteReceived(vote *Vote)
 }
 

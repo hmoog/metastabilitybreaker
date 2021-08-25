@@ -1,6 +1,8 @@
 # Metastabilitybreaker
 This package implements a testing framework for different metastability breaking mechanisms for IOTAs multiverse consensus, and it uses this framework to propose and test a new and simpler metastability breaking mechanism.
 
+**UPDATE: The mechanism actually fails for the newly implemented "SlowMinorityVoter" attack vector. I will anyway keep this repository online because it can be used to test FPC on a Set as well as possible future optimizations.**
+
 ## Motivation
 
 We currently plan to use FPC (which is based on an external source of randomness) to break metastable states.

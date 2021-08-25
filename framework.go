@@ -3,6 +3,8 @@ package metastabilitybreaker
 import (
 	"bytes"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 type Network struct {
 	MetastabilityBreakingThreshold time.Duration
 	Voters                         map[VoterID]Voter
+	BeforeNextVote                 *events.Event
 	VoteReceived                   *events.Event
 	WeightDistribution             *WeightDistribution
 }
@@ -27,6 +30,9 @@ func NewNetwork(metastabilityBreakingThreshold time.Duration) *Network {
 		MetastabilityBreakingThreshold: metastabilityBreakingThreshold,
 		Voters:                         make(map[VoterID]Voter),
 		WeightDistribution:             NewWeightDistribution(),
+		BeforeNextVote: events.NewEvent(func(handler interface{}, params ...interface{}) {
+			handler.(func(Voter))(params[0].(Voter))
+		}),
 		VoteReceived: events.NewEvent(func(handler interface{}, params ...interface{}) {
 			handler.(func(*Vote))(params[0].(*Vote))
 		}),
@@ -53,11 +59,18 @@ func (n *Network) ResolveConflicts(branchIDs ...BranchID) {
 	}
 
 	go func() {
-		for {
-			for _, voter := range n.Voters {
-				voter.SendVote()
+		votersList := make([]Voter, 0)
+		for _, voter := range n.Voters {
+			votersList = append(votersList, voter)
+		}
 
-				time.Sleep(100 * time.Millisecond)
+		for {
+			for _, voter := range votersList {
+				n.BeforeNextVote.Trigger(voter)
+
+				if voter.SendVote() {
+					time.Sleep(100 * time.Millisecond)
+				}
 			}
 		}
 	}()
@@ -288,6 +301,62 @@ func (a *ApprovalWeightManager) updateWeight(branchID BranchID, diff float64) {
 	defer a.weightsMutex.Unlock()
 
 	a.weights[branchID] += diff
+}
+
+func (a *ApprovalWeightManager) StringBranchWeights() string {
+	var buf bytes.Buffer
+	table := tablewriter.NewWriter(&buf)
+	table.SetHeader([]string{"BranchID", "Weight"})
+	table.SetBorder(false)
+	table.SetAutoFormatHeaders(false)
+	table.SetAlignment(tablewriter.ALIGN_LEFT)
+	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
+
+	entries := make([][]string, 0)
+	for branchID, weight := range a.weights {
+		entries = append(entries, []string{
+			branchID.String(), fmt.Sprintf("%0.2f", weight),
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		switch strings.Compare(strings.Join(entries[i][:], ""), strings.Join(entries[j][:], "")) {
+		case -1:
+			return true
+		default:
+			return false
+		}
+	})
+
+	table.AppendBulk(entries)
+	table.Render()
+
+	return buf.String()
+}
+
+func (a *ApprovalWeightManager) String() string {
+	var buf bytes.Buffer
+	table := tablewriter.NewWriter(&buf)
+	table.SetHeader([]string{"Voter", "Type", "BranchID"})
+	table.SetBorder(false)
+	table.SetAutoFormatHeaders(false)
+	table.SetAlignment(tablewriter.ALIGN_LEFT)
+	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
+
+	for voterID, branchID := range a.lastStatements {
+		voter, exists := a.voter.Network().Voters[voterID]
+		if !exists {
+			continue
+		}
+
+		table.AppendBulk([][]string{
+			{voterID.String(), voter.Type(), branchID.String()},
+		})
+	}
+
+	table.Render()
+
+	return buf.String()
 }
 
 // endregion ///////////////////////////////////////////////////////////////////////////////////////////////////////////
